@@ -1,0 +1,91 @@
+create or replace PROCEDURE GET_TIME_SERIES_STREAM(
+    protocol_app_id VARCHAR2,
+    min_date TIMESTAMP DEFAULT NULL,
+    max_date TIMESTAMP DEFAULT NULL,
+    subsample integer default 1,
+    FIELDS CLOB DEFAULT NULL,
+    metadata_filter CLOB DEFAULT NULL,
+    agg_function VARCHAR2 DEFAULT 'SUM'
+) AS
+    c_id NUMBER;
+    sql_stmt CLOB;
+    channels DBMS_SQL.NUMBER_TABLE;
+    channel_list VARCHAR2(128);
+    channel_id_list VARCHAR2(256);
+    channel_alias_list VARCHAR2(256);
+    Bind_Vars Varchar2(128);
+
+    --RESULTSET
+    c            NUMBER := dbms_sql.open_cursor( TRUE );
+    ret          NUMBER;
+BEGIN
+    SELECT channel_id BULK COLLECT INTO channels FROM sked.channel 
+    WHERE protocol_app_id IN (
+        SELECT COLUMN_VALUE 
+        FROM TABLE(sked.expand_list(get_time_series_stream.protocol_app_id))
+    );
+
+    FOR i IN 1 .. channels.COUNT LOOP
+        dbms_output.put_line(channels(i));
+    END LOOP;    
+
+    IF(channels.COUNT > 1) THEN
+        SELECT LISTAGG(bind_var, ',') WITHIN GROUP(ORDER BY bind_var) INTO bind_vars FROM (
+          SELECT ':c_' || LEVEL bind_var FROM dual CONNECT BY LEVEL <= (SELECT COUNT(1) FROM TABLE(channels))
+        );
+        SELECT LISTAGG(channel_id, ',') WITHIN GROUP(ORDER BY channel_id) INTO channel_list FROM (
+          SELECT column_value channel_id FROM TABLE(channels)
+        );
+        SELECT LISTAGG(pa_channel, ',') WITHIN GROUP(ORDER BY rownum) INTO channel_id_list FROM (
+            SELECT '"' || c.COLUMN_VALUE || '"' || ' ' || '"' || protocol_app_id || '_' || NAME || '"' pa_channel, rownum 
+            FROM sked.channel , TABLE(channels) C
+            WHERE channel.channel_id = c.column_value
+        );
+        
+        sql_stmt:= '
+            SELECT timestamp, ' || channel_id_list || ' FROM(
+                SELECT ROWNUM rn, res.* FROM (
+                    SELECT * FROM (
+                        SELECT channel_id, timestamp, value 
+                        FROM sked.streaming_results 
+                        WHERE channel_id IN (' || bind_vars || ')
+                            and timestamp >= :min_date
+                            and timestamp <  :max_date
+                    )
+                    PIVOT(
+                     '|| AGG_FUNCTION || '(VALUE) FOR CHANNEL_ID IN ( ' ||  channel_list ||  ' )
+                    ) ORDER BY timestamp
+                ) res
+            ) WHERE MOD(rn,:mod) = 0
+        ';
+
+        dbms_sql.parse(C, sql_stmt, dbms_sql.NATIVE);
+
+        FOR L IN (SELECT ':c_' || LEVEL bind_var, LEVEL FROM dual CONNECT BY LEVEL <= (SELECT COUNT(1) FROM TABLE(channels))) LOOP
+            dbms_sql.bind_variable(C, l.bind_var, channels(l.level));        
+        END LOOP;
+
+    ELSE
+        c_id := channels(1);
+        sql_stmt:= '
+            SELECT timestamp, value FROM(
+                SELECT rownum rn, timestamp, value 
+                FROM sked.streaming_results 
+                WHERE 
+                    channel_id = ' || c_id || ' 
+                    and timestamp >= :min_date
+                    and timestamp <  :max_date
+                ORDER BY timestamp
+            ) WHERE MOD(rn,:mod) = 0
+        ';
+        dbms_sql.parse(C, sql_stmt, dbms_sql.NATIVE);
+
+    END IF;
+    DBMS_SQL.BIND_VARIABLE(c, ':mod', SUBSAMPLE);
+    DBMS_SQL.BIND_VARIABLE(c, ':min_date', MIN_DATE);
+    dbms_sql.bind_variable(C, ':max_date', max_date);
+
+
+    ret := dbms_sql.EXECUTE(C);
+    dbms_sql.return_result( C ); 
+END get_time_series_stream;

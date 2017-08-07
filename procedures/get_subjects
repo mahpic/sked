@@ -1,0 +1,63 @@
+create or replace PROCEDURE GET_SUBJECTS 
+(
+  subject_id IN NUMBER DEFAULT NULL,
+  experiment_id IN VARCHAR2 DEFAULT NULL,
+  fields IN VARCHAR2 DEFAULT NULL
+) AS 
+     sql_stmt CLOB;
+     param_list   VARCHAR2(200);
+     
+    c            NUMBER := dbms_sql.open_cursor( TRUE );
+    src_cur      SYS_REFCURSOR;
+    ret          NUMBER;
+BEGIN
+    FOR FIELD IN ( SELECT LOWER(COLUMN_VALUE) val FROM TABLE(sked.expand_list(FIELDS))) LOOP
+        IF FIELD.val = 'id' THEN param_list := param_list || 'sub.subject_id id' || ', ';
+        ELSIF FIELD.val = 'name' THEN param_list := param_list || 'sub.name name' || ', ';
+        ELSIF FIELD.val = 'description' THEN param_list := param_list || 'sub.description description' || ', ';
+        ELSIF FIELD.val = 'species' THEN param_list := param_list || 'tax.name species' || ', ';
+        ELSIF FIELD.val = 'experiment_id' THEN param_list := param_list || 'e.experiment_id experiment_id' || ', ';
+        ELSIF FIELD.val = 'experiment_name' THEN param_list := param_list || 'e.name experiment_name' || ', ';
+        END IF;
+    END LOOP;
+    IF param_list IS NULL THEN
+        param_list := 'sub.subject_id id, sub.name name, e.experiment_id experiment_id';
+    ELSE
+        param_list := substr(param_list, 1, LENGTH(param_list) - 2);
+    END IF;   
+
+    sql_stmt := 'SELECT DISTINCT ' || param_list || 
+        ' FROM 
+            sked.subject sub,
+            sked.aliquot A,
+            sked.experiment E,
+            sked.taxon tax
+          WHERE
+            sub.subject_id = A.subject_id AND
+            A.experiment_id = E.experiment_id AND
+            sub.taxon_id = tax.taxon_id
+    ';    
+
+    IF experiment_id IS NOT NULL THEN
+        sql_stmt := sql_stmt || ' AND e.experiment_id = :experiment_id';
+    END IF;    
+
+    IF subject_id IS NOT NULL THEN
+        sql_stmt := sql_stmt || ' AND sub.subject_id = :subject_id';
+    END IF;
+
+    dbms_sql.parse(C, sql_stmt, dbms_sql.NATIVE);
+    
+    IF experiment_id IS NOT NULL THEN
+        DBMS_SQL.BIND_VARIABLE(c, ':experiment_id', experiment_id);
+    END IF;    
+    IF subject_id IS NOT NULL THEN
+        dbms_sql.bind_variable(C, ':subject_id', subject_id);
+    END IF;
+    
+    ret := dbms_sql.EXECUTE(C);
+
+    src_cur := dbms_sql.to_refcursor(C);
+    dbms_sql.return_result( src_cur ); 
+
+END GET_SUBJECTS;

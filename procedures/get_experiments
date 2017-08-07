@@ -1,0 +1,60 @@
+create or replace PROCEDURE GET_EXPERIMENTS 
+(
+  experiment_id IN VARCHAR2 DEFAULT NULL
+, project_id IN NUMBER DEFAULT NULL
+, FIELDS IN VARCHAR2 DEFAULT NULL
+) AS 
+    sql_stmt     CLOB;
+    param_list   VARCHAR2(2000);
+    exp_filter   VARCHAR2(100) := ' e.experiment_id = :e_id';
+    proj_filter  VARCHAR2(100) := ' p.project_id = :p_id';
+    
+    C NUMBER  := dbms_sql.open_cursor( TRUE );
+    src_cur      SYS_REFCURSOR;
+    ret          NUMBER;
+
+BEGIN
+    FOR FIELD IN ( SELECT LOWER(COLUMN_VALUE) val FROM TABLE(sked.expand_list(FIELDS))) LOOP
+        IF FIELD.val = 'id' THEN param_list := param_list || 'e.experiment_id id' || ', ';
+        ELSIF FIELD.val = 'name' THEN param_list := param_list || 'e.name name' || ', ';
+        ELSIF FIELD.val = 'description' THEN param_list := param_list || 'e.description description' || ', ';
+        ELSIF FIELD.val = 'project_id' THEN param_list := param_list || 'p.project_id project_id' || ', ';
+        ELSIF FIELD.val = 'project_name' THEN param_list := param_list || 'p.name project_name' || ', ';
+        END IF;
+    END LOOP;
+    IF param_list IS NULL THEN
+        param_list := 'e.experiment_id id, e.name name, e.description description, p.project_id project_id, p.name project_name';
+    ELSE
+        param_list := substr(param_list, 1, LENGTH(param_list) - 2);
+    END IF;   
+
+    sql_stmt := 'SELECT ' || param_list || ' FROM sked.experiment e JOIN sked.project p ON e.project_id = p.project_id';
+
+    IF experiment_id IS NOT NULL AND project_id IS NOT NULL THEN
+        sql_stmt := sql_stmt || ' WHERE';
+            sql_stmt := sql_stmt || exp_filter;
+            sql_stmt := sql_stmt || ' AND' || proj_filter;
+    ELSIF experiment_id IS NOT NULL OR project_id IS NOT NULL THEN
+        sql_stmt := sql_stmt || ' WHERE';
+        IF experiment_id IS NOT NULL THEN
+            sql_stmt:= sql_stmt || exp_filter;
+        ELSE
+            sql_stmt:= sql_stmt || proj_filter;
+        END IF;    
+    END IF;    
+
+    dbms_sql.parse(C, sql_stmt, dbms_sql.NATIVE);
+
+    IF project_id IS NOT NULL THEN
+        dbms_sql.bind_variable(C, ':p_id', project_id);
+    END IF;
+    IF experiment_id IS NOT NULL THEN
+        dbms_sql.bind_variable(C, ':e_id', experiment_id);
+    END IF;
+    
+    ret := dbms_sql.EXECUTE(C);
+
+    src_cur := dbms_sql.to_refcursor(C);
+    dbms_sql.return_result( src_cur );  
+
+END GET_EXPERIMENTS;

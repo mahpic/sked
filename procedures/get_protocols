@@ -1,0 +1,77 @@
+create or replace PROCEDURE GET_PROTOCOLS
+(
+  experiment_id IN VARCHAR2 DEFAULT NULL
+, subject_id IN NUMBER DEFAULT NULL  
+, FIELDS IN VARCHAR2 DEFAULT NULL 
+, DATA_TYPE IN VARCHAR2 DEFAULT NULL
+) AS 
+    sql_stmt CLOB;
+    param_list   VARCHAR2(200);
+    sub_clause VARCHAR2(1000);
+    from_clause VARCHAR2(1000);
+    where_clause VARCHAR2(1000);
+    sub_protocols VARCHAR2(4000);
+    sub_id NUMBER := subject_id;
+    
+    FIELD VARCHAR2(64);
+    val VARCHAR2(64);
+BEGIN
+    FOR FIELD IN ( SELECT LOWER(COLUMN_VALUE) val FROM TABLE(sked.expand_list(FIELDS))) LOOP
+        IF    FIELD.val = 'protocol_app_id' THEN param_list := param_list || 'pa.protocol_app_id' || ', ';
+        ELSIF FIELD.val = 'summary' THEN param_list := param_list || 'pa.summary' || ', ';
+        ELSIF FIELD.val = 'data_type' THEN param_list := param_list || 'p.data_type' || ', ';
+        ELSIF FIELD.val = 'protocol' THEN param_list := param_list || 'p.name protocol' || ', ';
+        ELSIF FIELD.val = 'protocol_description' THEN param_list := param_list || 'p.description protocol_description' || ', ';
+        END IF;
+    END LOOP;
+    
+    IF param_list IS NULL THEN
+        param_list := 'pa.protocol_app_id, pa.summary, p.data_type, P.NAME protocol, P.DESCRIPTION protocol_description';
+    ELSE
+        param_list := substr(param_list, 1, LENGTH(param_list) - 2);
+    END IF;   
+
+    from_clause := ' 
+        FROM sked.protocolapplication pa,
+           sked.protocol p,
+           sked.pa_experiment_xref xref
+    ';
+
+    where_clause := ' 
+        WHERE pa.protocol_id = p.protocol_id
+        AND xref.protocol_app_id = pa.protocol_app_id
+    ';
+
+    IF data_type IS NOT NULL THEN
+        where_clause := where_clause || q'[ AND lower(p.data_type) = lower(']'||data_type||q'[')]';
+    END IF;
+
+    IF experiment_id IS NOT NULL THEN
+        where_clause := where_clause || ' AND xref.experiment_id =''' || experiment_id || '''';
+    END IF;
+
+    IF subject_id IS NOT NULL THEN
+        SELECT LISTAGG(protocol_app_id, ',') WITHIN GROUP (ORDER BY protocol_app_id) INTO sub_protocols 
+        FROM(
+            SELECT distinct protocol_app_id 
+            FROM 
+               sked.results res
+            WHERE   
+                res.aliquot_id IN (SELECT aliquot_id FROM sked.aliquot WHERE subject_id = sub_id)
+            UNION
+            SELECT distinct protocol_app_id 
+            FROM 
+               sked.channel ch
+            WHERE   
+                ch.aliquot_id IN (SELECT aliquot_id FROM sked.aliquot WHERE subject_id = sub_id)
+        )
+        ;
+        dbms_output.put_line(sub_protocols);
+
+        where_clause := where_clause || ' AND pa.protocol_app_id IN (' || sub_protocols || ')';
+    END IF;
+
+    sql_stmt := sql_stmt || ' SELECT ' || param_list || ' ' || from_clause || ' ' || where_clause;  
+
+    sked.return_resultset(sql_stmt);    
+END GET_PROTOCOLS;

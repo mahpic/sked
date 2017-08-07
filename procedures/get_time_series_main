@@ -1,0 +1,66 @@
+create or replace PROCEDURE GET_TIME_SERIES_MAIN(
+    protocol_app_id NUMBER,
+    subject_id NUMBER,
+    FIELDS CLOB DEFAULT NULL,
+    agg_function VARCHAR2 DEFAULT 'AVG',
+    metadata_filter CLOB DEFAULT NULL,
+    transpose NUMBER DEFAULT 0
+) AS
+    sql_stmt     CLOB;
+    field_list   CLOB;
+    date_list    CLOB;
+    pivot_clause CLOB;
+    
+
+BEGIN
+    IF FIELDS IS NULL THEN
+        SELECT listagg_clob('''' || r.field || '''') INTO field_list
+        FROM
+            sked.data_ontology_xref R JOIN sked.ontologyterm ont ON r.ontology_term_id = ont.ontology_term_id
+        WHERE
+            R.protocol_app_id  = get_time_series_main.protocol_app_id
+        ;        
+    ELSE 
+        SELECT listagg_clob('''' || column_value || '''') INTO field_list
+        FROM TABLE(sked.expand_list(fields));
+    END IF;
+    
+    IF transpose = 1 THEN
+        SELECT sked.listagg_clob('''' || creation_date || '''') 
+        INTO date_list FROM(
+            SELECT distinct a.CREATION_DATE
+            FROM sked.results r, sked.aliquot a
+            WHERE
+                R.aliquot_id = A.aliquot_id 
+                AND protocol_app_id = get_time_series_main.protocol_app_id
+                AND subject_id = get_time_series_main.subject_id 
+            ORDER BY CREATION_DATE
+        )
+        ;
+        
+        pivot_clause := '
+        PIVOT(
+           '|| AGG_FUNCTION || '(VALUE) FOR CREATION_DATE IN ( ' ||  date_list ||  ' )
+        )
+        ';
+    ELSE
+        pivot_clause := '
+        PIVOT(
+           '|| AGG_FUNCTION || '(VALUE) FOR FIELD IN ( ' ||  field_list ||  ' )
+        )ORDER BY CREATION_DATE
+        ';
+    END IF;
+
+    sql_stmt     := '
+        SELECT * FROM(
+        SELECT a.CREATION_DATE, r.FIELD, r.VALUE
+        FROM sked.results r, sked.aliquot a
+        WHERE
+            r.aliquot_id = a.aliquot_id 
+            AND protocol_app_id = ' || protocol_app_id || '
+            AND subject_id = ' || subject_id || ' 
+        )' || pivot_clause
+     ;
+
+    sked.return_resultset(sql_stmt);
+END GET_TIME_SERIES_MAIN;

@@ -1,0 +1,63 @@
+create or replace PROCEDURE GET_TIME_SERIES_RANGE(
+    protocol_app_id NUMBER,
+    subject_id NUMBER DEFAULT NULL
+) AS
+    is_stream VARCHAR2(1);
+    ont_id  NUMBER;
+    c_id NUMBER;
+    src_cur      SYS_REFCURSOR;
+    C            NUMBER;
+    ret          NUMBER;
+    sql_stmt     VARCHAR2(1024);
+    min_timestamp VARCHAR2(24);
+    max_timestamp VARCHAR2(24);
+BEGIN
+
+    SELECT ontology_term_id INTO ont_id FROM sked.ontologyterm 
+    WHERE NAME = 'is_stream' AND CATEGORY = 'SKED_SCHEMA';
+    dbms_output.put_line(ont_id);
+
+    BEGIN
+        SELECT nvl(VALUE, '0') INTO is_stream 
+        FROM sked.protocolapplication p left join sked.pa_metadata pa ON p.protocol_app_id = pa.protocol_app_id
+        WHERE 
+            P.protocol_app_id = get_time_series_range.protocol_app_id
+            and pa.ontology_term_id = ont_id
+        ;
+    EXCEPTION
+          WHEN no_data_found THEN
+            is_stream := 0;
+    END;
+
+    IF is_stream = '0' THEN
+        OPEN src_cur FOR
+            SELECT 
+                to_char(to_timestamp(MIN(A.creation_date)),'YY-MM-DD HH24:MI:SS.ff3') min_timestamp, 
+                TO_CHAR(to_timestamp(max(a.CREATION_DATE)), 'YY-MM-DD HH24:MI:SS.ff3') max_timestamp
+            FROM sked.results r, sked.aliquot a
+            WHERE
+                R.aliquot_id = A.aliquot_id 
+                AND protocol_app_id = get_time_series_range.protocol_app_id
+                AND subject_id = get_time_series_range.subject_id 
+        ;
+    ELSE
+        C:= dbms_sql.open_cursor( TRUE );
+        SELECT channel_id INTO c_id FROM sked.channel 
+        WHERE protocol_app_id = get_time_series_range.protocol_app_id
+            AND ROWNUM < 2;
+        
+        EXECUTE IMMEDIATE 'SELECT TO_CHAR(MIN(TIMESTAMP), ''YY-MM-DD HH24:MI:SS.ff3'') min_timestamp FROM sked.streaming_results
+                           WHERE channel_id = ' || c_id 
+        INTO min_timestamp;
+        
+        EXECUTE IMMEDIATE 'SELECT TO_CHAR(MAX(TIMESTAMP), ''YY-MM-DD HH24:MI:SS.ff3'') max_timestamp FROM sked.streaming_results
+                           WHERE channel_id = ' || c_id 
+        INTO max_timestamp;
+        
+        OPEN src_cur FOR
+            SELECT min_timestamp min_timestamp, max_timestamp max_timestamp FROM dual
+        ;
+    END IF;
+
+    dbms_sql.return_result( src_cur );     
+END GET_TIME_SERIES_RANGE;

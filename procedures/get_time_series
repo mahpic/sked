@@ -1,0 +1,59 @@
+create or replace PROCEDURE get_time_series(
+    protocol_app_id VARCHAR2,
+    subject_id NUMBER DEFAULT NULL,
+    FIELDS CLOB DEFAULT NULL,
+    agg_function VARCHAR2 DEFAULT 'AVG',
+    transpose NUMBER DEFAULT 0,
+    metadata_filter CLOB DEFAULT NULL,
+    min_date TIMESTAMP DEFAULT NULL,
+    max_date TIMESTAMP DEFAULT NULL,
+    subsample INTEGER DEFAULT 1
+) AS
+    sql_stmt     CLOB;
+    field_list   CLOB;
+    num_stream INTEGER;
+    num_pa INTEGER;
+    ont_id NUMBER;
+
+BEGIN
+    SELECT ontology_term_id INTO ont_id FROM sked.ontologyterm 
+    WHERE NAME = 'is_stream' AND CATEGORY = 'SKED_SCHEMA';
+    
+    SELECT count(*) INTO num_pa FROM table(sked.expand_list(get_time_series.protocol_app_id));
+
+    SELECT sum(NVL(value, '0')) INTO num_stream 
+    FROM sked.protocolapplication P LEFT OUTER JOIN 
+        (SELECT protocol_app_id, value FROM sked.pa_metadata pa where ontology_term_id = ont_id) pa
+        ON p.protocol_app_id = pa.protocol_app_id
+    WHERE 
+        P.protocol_app_id IN (select column_value from table(sked.expand_list(get_time_series.protocol_app_id)))
+    ;
+    
+    IF num_stream > 0 THEN
+        IF num_stream = num_pa THEN
+            sked.get_time_series_stream(
+                protocol_app_id => protocol_app_id,
+                min_date => min_date,
+                max_date => max_date,
+                subsample => subsample,
+                agg_function => agg_function
+            );
+        ELSE
+             raise_application_error(-20101, 'Mixed Streaming and Non-Streaming results are not supported');
+        END IF;
+    ELSIF num_stream = 0 THEN
+        IF num_pa = 1 THEN
+            sked.get_time_series_main(
+                protocol_app_id => protocol_app_id,
+                subject_id => subject_id,
+                FIELDS  => FIELDS,
+                agg_function => agg_function,
+                metadata_filter => metadata_filter,
+                transpose => transpose
+            );
+        ELSE 
+            raise_application_error(-20101, 'Results from multiple non-streaming protocols are not supported');
+        END IF;
+    END IF;
+    
+END GET_TIME_SERIES;

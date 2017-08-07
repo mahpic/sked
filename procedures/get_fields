@@ -1,0 +1,41 @@
+create or replace PROCEDURE GET_FIELDS 
+(
+  protocol_app_id IN NUMBER,
+  fields IN VARCHAR DEFAULT NULL
+) AS 
+    sql_stmt CLOB;
+    param_list   VARCHAR2(200);
+    
+    C NUMBER  := dbms_sql.open_cursor( TRUE );
+    src_cur      SYS_REFCURSOR;
+    ret          NUMBER;
+BEGIN
+     FOR FIELD IN ( SELECT LOWER(COLUMN_VALUE) val FROM TABLE(sked.expand_list(FIELDS))) LOOP
+        IF FIELD.val = 'name' THEN param_list := param_list || 'r.field name' || ', ';
+        ELSIF FIELD.val = 'definition' THEN param_list := param_list || 'ont.definition definition' || ', ';
+        ELSIF FIELD.val = 'unit' THEN param_list := param_list || 'ont.unit unit' || ', ';
+        END IF;
+    END LOOP;
+
+    IF param_list IS NULL THEN
+        param_list := 'r.field name, ont.definition definition, ont.unit unit';
+    ELSE
+        param_list := substr(param_list, 1, LENGTH(param_list) - 2);
+    END IF;   
+
+    sql_stmt := 'SELECT ' || param_list;
+
+    sql_stmt := sql_stmt ||' 
+        FROM
+            sked.data_ontology_xref R JOIN sked.ontologyterm ont ON r.ontology_term_id = ont.ontology_term_id
+        WHERE
+            R.protocol_app_id  = :pa_id'
+    ;
+
+    dbms_sql.parse(C, sql_stmt, dbms_sql.NATIVE);
+    dbms_sql.bind_variable(C, ':pa_id', protocol_app_id);
+    
+    ret := dbms_sql.EXECUTE(C);
+    src_cur := dbms_sql.to_refcursor(C);
+    dbms_sql.return_result( src_cur );  
+END GET_FIELDS;

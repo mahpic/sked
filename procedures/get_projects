@@ -1,0 +1,44 @@
+create or replace PROCEDURE GET_PROJECTS (
+    project_id   IN NUMBER DEFAULT NULL,
+    fields       IN VARCHAR2 DEFAULT NULL
+) AS
+    sql_stmt     clob;
+    param_list   VARCHAR2(2000);
+    
+    c            NUMBER := dbms_sql.open_cursor( TRUE );
+    src_cur      SYS_REFCURSOR;
+    ret          NUMBER;
+BEGIN
+    FOR FIELD IN ( SELECT LOWER(COLUMN_VALUE) val FROM TABLE(sked.expand_list(FIELDS))) LOOP
+        IF FIELD.val = 'id' THEN param_list := param_list || 'project_id id' || ', ';
+        ELSIF FIELD.val = 'name' THEN param_list := param_list || 'name' || ', ';
+        ELSIF FIELD.val = 'description' THEN param_list := param_list || 'description' || ', ';
+        END IF;
+    END LOOP;
+    IF param_list IS NULL THEN 
+        param_list := 'project_id id, name, description';
+    ELSE
+        param_list := substr(param_list, 1, length(param_list) - 2);
+    END IF;    
+
+    dbms_output.put_line(param_list);
+
+    sql_stmt := 'SELECT ' || param_list || ' FROM sked.project';
+
+    IF project_id IS NOT NULL THEN
+        sql_stmt := sql_stmt || ' WHERE project_id = :project_id';
+    END IF;
+
+    dbms_sql.parse(C, sql_stmt, dbms_sql.NATIVE);
+    
+    IF project_id IS NOT NULL THEN
+        dbms_sql.bind_variable(C, ':project_id', project_id);
+    END IF;    
+    
+    
+    ret := dbms_sql.EXECUTE(C);
+
+    src_cur := dbms_sql.to_refcursor(C);
+    dbms_sql.return_result( src_cur ); 
+
+END get_projects;
